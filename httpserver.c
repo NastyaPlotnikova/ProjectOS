@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 #include<stdio.h>
 #include<string.h>
 #include<stdlib.h>
@@ -180,3 +181,63 @@ void *respond(void* arg)
     close(clients[n]);
     clients[n]=-1;
 }
+=======
+#include<stdio.h>
+#include<string.h>
+#include<stdlib.h>
+#include<unistd.h>
+#include<sys/types.h>
+#include<sys/stat.h>
+#include<sys/socket.h>
+#include<arpa/inet.h>
+#include<netdb.h>
+#include<signal.h>
+#include<fcntl.h>
+
+int listenfd;
+void startServer(char *);
+
+int main(int argc, char* argv[])
+{
+char PORT[6];
+startServer(PORT);
+}
+
+
+//start server
+void startServer(char *port)
+{
+    struct addrinfo hints, *res, *p;
+    // getaddrinfo for host
+    memset (&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+    if (getaddrinfo( NULL, port, &hints, &res) != 0)
+    {
+        perror ("getaddrinfo() error");
+        exit(1);
+    }
+    // socket and bind
+    for (p = res; p!=NULL; p=p->ai_next)
+    {
+        listenfd = socket (p->ai_family, p->ai_socktype, 0);
+        if (listenfd == -1) continue;
+        if (bind(listenfd, p->ai_addr, p->ai_addrlen) == 0) break;
+    }
+    if (p==NULL)
+    {
+        perror ("socket() or bind()");
+        exit(1);
+    }
+
+    freeaddrinfo(res);
+
+    // listen for incoming connections
+    if ( listen (listenfd, 1000000) != 0 )
+    {
+        perror("listen() error");
+        exit(1);
+    }
+}
+>>>>>>> 6630e20750861d33b776b2cd7b38e4d36069ca9a
