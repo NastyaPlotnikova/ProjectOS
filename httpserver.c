@@ -1,186 +1,183 @@
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <stdio.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <signal.h>
-#include <fcntl.h>
-#include <sys/shm.h>
-#include <string.h>
-#include <pthread.h>
+#include<stdio.h>
+#include<string.h>
+#include<stdlib.h>
+#include<unistd.h>
+#include<sys/types.h>
+#include<sys/stat.h>
+#include<sys/socket.h>
+#include<arpa/inet.h>
+#include<netdb.h>
+#include<signal.h>
+#include<fcntl.h>
 
-#define DEBUG
-#define PARTBUF_SIZE 1024
-#define CLIENT_LIMIT 10
+#define CONNMAX 5
+#define BYTES 1024
 
-#ifdef DEBUG
-#define TRACE printf("%s %d\n", __FILE__, __LINE__);
-#else
-#define TRACE
-#endif
+char *ROOT;
+int listenfd, clients[CONNMAX];
+pthread_t ntid[5];
+pthread_t servtid;
+char *defaultport="6565";
 
-struct http_procotol
+void error(char *);
+void startServer(char *);
+void *respond(void *);
+void createThread(int);
+
+
+int main(int argc, char* argv[])
 {
-  char *header;
-  char *body;
-};
+    struct sockaddr_in clientaddr;
+    socklen_t addrlen;
+	
+    char c;  
+    int j=0;	
+    
+    
+    char PORT[6];
+    ROOT = getenv("PWD");
+    strcpy(PORT,defaultport);
 
-typedef struct c_client
-{
-    int curcount;
-    pthread_mutex_t count_mutex;
-} c_client;
+    int slot=0;
 
-struct http_procotol server_answer;
-char   msg[99999];
-char   path[99999];
-char   html[PARTBUF_SIZE];
-char   *ROOT, *req_params[2];
-int    shmid;
-void   *shared_memory = (void *)0;
-
-void close_server(int sig);
-
-int main()
-{
-  int      server_sockfd, client_sockfd;
-  int      server_len, client_len;
-  int      res;
-  struct   sockaddr_in server_address;
-  struct   sockaddr_in client_address;
-  struct   sigaction act;
-  c_client *shared_limit;
-
-  act.sa_handler = close_server;
-  sigemptyset(&act.sa_mask);
-  act.sa_flags = 0;
-  sigaction(SIGINT, &act, 0);
-
-  shmid = shmget((key_t)123,sizeof(c_client),0666 | IPC_CREAT);
-  if (shmid == -1)
-  {
-      fprintf(stderr,"shmget failed\n");
-      exit(EXIT_FAILURE);
-  }
-
-  shared_memory = shmat(shmid,(void *)0,0);
-  if (shared_memory == (void *)-1)
-  {
-      fprintf(stderr,"shmat failed\n");
-      exit(EXIT_FAILURE);
-  }
-
-  shared_limit = (c_client *)shared_memory;
-
-  res = pthread_mutex_init(&shared_limit->count_mutex, NULL);
-  if(res != 0)
-  {
-      perror("Mutex init failed\n");
-      exit(EXIT_FAILURE);
-  }
-
-  server_sockfd = socket(AF_INET,SOCK_STREAM,0);
-  server_address.sin_family = AF_INET;
-  server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
-  server_address.sin_port = htons(6565);
-  server_len = sizeof(server_address);
-  bind(server_sockfd, (struct sockaddr *)&server_address, server_len);
-  
-  listen(server_sockfd, 5);
-  signal(SIGCHLD,SIG_IGN);
-
-  while(1)
-  {
-    int bytes, fd;
-
-    printf("server waititng \n");
-    client_len = sizeof(client_address);
-    client_sockfd = accept(server_sockfd,(struct sockaddr *)&client_address,&client_len);
-
-    if(shared_limit->curcount >= CLIENT_LIMIT)
-    {
-        printf("============server clients limit is exceeded! socket will be closed=============\n");
-        close(client_sockfd);
-    }
-    else
-        if (fork() == 0)
+    //Parsing the command line arguments
+    while ((c = getopt (argc, argv, "p:r:")) != -1)
+        switch (c)
         {
-            pthread_mutex_lock(&shared_limit->count_mutex);
-            shared_limit->curcount++;
-            printf("clients count = %d\n", shared_limit->curcount);
-            pthread_mutex_unlock(&shared_limit->count_mutex);
-
-            printf("connection is init\n");
-
-            memset((void *)msg,(int)'\0',99999);
-            read(client_sockfd, msg, sizeof(msg));
-            printf("server get this:\n%s\n", msg);
-
-            req_params[0] = strtok(msg, " ");
-            if (strncmp(req_params[0], "GET", 4) == 0)
-            {
-                printf("this is GET query\n");
-                req_params[1] = strtok(NULL," ");
-
-                if (strncmp(req_params[1],"/", 2) == 0)
-                    req_params[1] = "/index.html";
-
-               if (strstr(req_params[1], "..") != NULL)
-                    req_params[1] = "/index.html";
-
-                if ((fd = open(req_params[1] + 1, O_RDONLY)) != -1)
-                {
-                    server_answer.header = "HTTP/1.1 200 OK\n\n";
-                    send(client_sockfd, server_answer.header, strlen(server_answer.header), 0);
-
-                    while((bytes = read(fd, html, PARTBUF_SIZE)) > 0)
-                    {
-                        write(client_sockfd, html, bytes);
-                    }
-                    close(fd);
-                }
-                else
-                {
-                    server_answer.header = "HTTP/1.1 404 Not Found\n\n";
-                    server_answer.body = "<html><body><h1>404 Not Found</h1></body></html>";
-                    send(client_sockfd, server_answer.header, strlen(server_answer.header), 0);
-                    send(client_sockfd, server_answer.body, strlen(server_answer.body), 0);
-                }
-
-                close(client_sockfd);
-                pthread_mutex_lock(&shared_limit->count_mutex);
-                shared_limit->curcount--;
-                printf("clients count = %d\n", shared_limit->curcount);
-                pthread_mutex_unlock(&shared_limit->count_mutex);
-
-                exit(EXIT_SUCCESS);
-            }
+            case 'r':
+                ROOT = malloc(strlen(optarg));
+                strcpy(ROOT,optarg);
+                break;
+            case 'p':
+                strcpy(PORT,optarg);
+                break;
+            case '?':
+                fprintf(stderr,"Wrong arguments given!!!\n");
+                exit(1);
+            default:
+                exit(1);
         }
+    
+    printf("Server started at port no. %s%s%s with root directory as %s%s%s\n","\033[92m",PORT,"\033[0m","\033[92m",ROOT,"\033[0m");
+    // Setting all elements to -1: signifies there is no client connected
+    int i;
+    for (i=0; i<CONNMAX; i++)
+        clients[i]=-1;
+    startServer(PORT);
+
+    // ACCEPT connections
+    while (1)
+    {
+        addrlen = sizeof(clientaddr);
+        clients[slot] = accept (listenfd, (struct sockaddr *) &clientaddr, &addrlen);
+
+        if (clients[slot]<0)
+            error ("accept() error");
         else
         {
-            close(client_sockfd);
-        }
-  }
-} 
-
-void close_server(int sig)
-{
-    printf("server closing...\n");
-
-    if(shmdt(shared_memory) == -1)
-    {
-        fprintf(stderr,"shmdt failed\n");
-        exit(EXIT_FAILURE);
-    }
-
-    if(shmctl(shmid,IPC_RMID,0) == -1)
-    {
-        fprintf(stderr,"shmctl(IPC_RMID) failed\n");
-        exit(EXIT_FAILURE);
-    }
-
-    exit(EXIT_SUCCESS);
+		createThread(slot);
+		}
+        while (clients[slot]!=-1) slot = (slot+1)%CONNMAX;
+	}
+    return 0;
 }
 
+
+void createThread(int k) {
+	int *m = (int *)malloc(sizeof(int));
+	*m = k;
+	int err = pthread_create(&ntid[k], NULL, respond, (void *) m);
+	if (err != 0) {
+		printf("it's impossible to create a thread %s\n", strerror(err));
+	}
+}
+
+//start server
+void startServer(char *port)
+{
+    struct addrinfo hints, *res, *p;
+    // getaddrinfo for host
+    memset (&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+    if (getaddrinfo( NULL, port, &hints, &res) != 0)
+    {
+        perror ("getaddrinfo() error");
+        exit(1);
+    }
+    // socket and bind
+    for (p = res; p!=NULL; p=p->ai_next)
+    {
+        listenfd = socket (p->ai_family, p->ai_socktype, 0);
+        if (listenfd == -1) continue;
+        if (bind(listenfd, p->ai_addr, p->ai_addrlen) == 0) break;
+    }
+    if (p==NULL)
+    {
+        perror ("socket() or bind()");
+        exit(1);
+    }
+
+    freeaddrinfo(res);
+
+    // listen for incoming connections
+    if ( listen (listenfd, 1000000) != 0 )
+    {
+        perror("listen() error");
+        exit(1);
+    }
+}
+
+//client connection
+void *respond(void* arg)
+{
+    char mesg[99999], *reqline[3], data_to_send[BYTES], path[99999];
+    int rcvd, fd, bytes_read;
+    int *p = (int *) arg;
+	int n = *p;
+    memset( (void*)mesg, (int)'\0', 99999 );
+
+    rcvd=recv(clients[n], mesg, 99999, 0);
+
+    if (rcvd<0)    // receive error
+        fprintf(stderr,("recv() error\n"));
+    else if (rcvd==0)    // receive socket closed
+        fprintf(stderr,"Client disconnected upexpectedly.\n");
+    else    // message received
+    {
+        printf("%s", mesg);
+        reqline[0] = strtok (mesg, " \t\n");
+        if ( strncmp(reqline[0], "GET\0", 4)==0 )
+        {
+            reqline[1] = strtok (NULL, " \t");
+            reqline[2] = strtok (NULL, " \t\n");
+            if ( strncmp( reqline[2], "HTTP/1.0", 8)!=0 && strncmp( reqline[2], "HTTP/1.1", 8)!=0 )
+            {
+                write(clients[n], "HTTP/1.0 400 Bad Request\n", 25);
+            }
+            else
+            {
+                if ( strncmp(reqline[1], "/\0", 2)==0 )
+                    reqline[1] = "/index.html";        //Because if no file is specified, index.html will be opened by default (like it happens in APACHE...
+
+                strcpy(path, ROOT);
+                strcpy(&path[strlen(ROOT)], reqline[1]);
+                printf("file: %s\n", path);
+
+                if ( (fd=open(path, O_RDONLY))!=-1 )    //FILE FOUND
+                {
+                    send(clients[n], "HTTP/1.0 200 OK\n\n", 17, 0);
+                    while ( (bytes_read=read(fd, data_to_send, BYTES))>0 )
+                        write (clients[n], data_to_send, bytes_read);
+                }
+                else    write(clients[n], "HTTP/1.0 404 Not Found\n", 23); //FILE NOT FOUND
+            }
+        }
+    }
+
+    //Closing SOCKET
+    shutdown (clients[n], SHUT_RDWR);         //All further send and recieve operations are DISABLED...
+    close(clients[n]);
+    clients[n]=-1;
+}
