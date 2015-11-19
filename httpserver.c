@@ -33,7 +33,6 @@ int main(int argc, char* argv[])
     char c;  
     int j=0;	
     
-    
     char PORT[6];
     ROOT = getenv("PWD");
     strcpy(PORT,defaultport);
